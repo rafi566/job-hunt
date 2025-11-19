@@ -3,7 +3,36 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8080';
-const DEFAULT_CONNECTORS = [
+
+type ConnectorKind = 'source' | 'destination';
+
+type ConfigMap = Record<string, string>;
+
+interface Connector {
+  name: string;
+  type: ConnectorKind;
+  description: string;
+  supportsDDL: boolean;
+  maxParallel: number;
+}
+
+interface PipelineConfig {
+  name: string;
+  sourceType: string;
+  sourceConfig: ConfigMap;
+  destType: string;
+  destConfig: ConfigMap;
+}
+
+interface RunResult {
+  pipelineName: string;
+  startedAt: string;
+  finishedAt: string;
+  records: number;
+  error?: string;
+}
+
+const DEFAULT_CONNECTORS: Connector[] = [
   {
     name: 'mysql',
     type: 'source',
@@ -54,18 +83,32 @@ const DEFAULT_CONNECTORS = [
     maxParallel: 4,
   },
 ];
-const DEFAULT_SOURCE_CONFIG = { host: 'localhost', port: '5432', user: 'demo', password: 'demo', database: 'sample' };
-const DEFAULT_DEST_CONFIG = { host: 'localhost', port: '5432', user: 'demo', password: 'demo', database: 'warehouse' };
+
+const DEFAULT_SOURCE_CONFIG: ConfigMap = {
+  host: 'localhost',
+  port: '5432',
+  user: 'demo',
+  password: 'demo',
+  database: 'sample',
+};
+
+const DEFAULT_DEST_CONFIG: ConfigMap = {
+  host: 'localhost',
+  port: '5432',
+  user: 'demo',
+  password: 'demo',
+  database: 'warehouse',
+};
 
 export default function HomePage() {
-  const [connectors, setConnectors] = useState(DEFAULT_CONNECTORS);
-  const [pipelines, setPipelines] = useState([]);
+  const [connectors, setConnectors] = useState<Connector[]>(DEFAULT_CONNECTORS);
+  const [pipelines, setPipelines] = useState<PipelineConfig[]>([]);
   const [name, setName] = useState('nightly-sync');
   const [selectedSrc, setSelectedSrc] = useState('mysql');
   const [selectedDst, setSelectedDst] = useState('postgres');
   const [running, setRunning] = useState(false);
-  const [lastRun, setLastRun] = useState(null);
-  const [error, setError] = useState(null);
+  const [lastRun, setLastRun] = useState<RunResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const sourceOptions = useMemo(() => connectors.filter((c) => c.type === 'source'), [connectors]);
   const destOptions = useMemo(() => connectors.filter((c) => c.type === 'destination'), [connectors]);
@@ -79,8 +122,10 @@ export default function HomePage() {
     try {
       const res = await fetch(`${API_BASE}/connectors`, { cache: 'no-cache' });
       if (!res.ok) throw new Error('failed');
-      const json = await res.json();
-      setConnectors(json);
+      const json = (await res.json()) as Connector[];
+      if (Array.isArray(json) && json.length > 0) {
+        setConnectors(json);
+      }
     } catch (err) {
       console.warn('Using fallback connectors', err);
     }
@@ -90,8 +135,10 @@ export default function HomePage() {
     try {
       const res = await fetch(`${API_BASE}/pipelines`, { cache: 'no-cache' });
       if (!res.ok) throw new Error('failed to load pipelines');
-      const json = await res.json();
-      setPipelines(json);
+      const json = (await res.json()) as PipelineConfig[];
+      if (Array.isArray(json)) {
+        setPipelines(json);
+      }
     } catch (err) {
       console.warn('Pipeline list fallback', err);
     }
@@ -99,13 +146,14 @@ export default function HomePage() {
 
   async function createPipeline() {
     setError(null);
-    const payload = {
+    const payload: PipelineConfig = {
       name: name.trim() || 'nightly-sync',
       sourceType: selectedSrc,
       destType: selectedDst,
       sourceConfig: { ...DEFAULT_SOURCE_CONFIG },
       destConfig: { ...DEFAULT_DEST_CONFIG },
     };
+
     try {
       const res = await fetch(`${API_BASE}/pipelines`, {
         method: 'POST',
@@ -119,13 +167,13 @@ export default function HomePage() {
     }
   }
 
-  async function runPipeline(targetName) {
+  async function runPipeline(targetName: string) {
     setRunning(true);
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/pipelines/${targetName}/run`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = (await res.json()) as RunResult;
       setLastRun(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -182,7 +230,11 @@ function HeroSection() {
   );
 }
 
-function ConnectorsSection({ connectors }) {
+interface ConnectorsSectionProps {
+  connectors: Connector[];
+}
+
+function ConnectorsSection({ connectors }: ConnectorsSectionProps) {
   return (
     <section style={{ marginTop: 28 }}>
       <h2>Connectors</h2>
@@ -195,7 +247,11 @@ function ConnectorsSection({ connectors }) {
   );
 }
 
-function ConnectorCard({ connector }) {
+interface ConnectorCardProps {
+  connector: Connector;
+}
+
+function ConnectorCard({ connector }: ConnectorCardProps) {
   return (
     <div className="card">
       <div className="pill" style={{ marginBottom: 10 }}>
@@ -210,6 +266,19 @@ function ConnectorCard({ connector }) {
   );
 }
 
+interface PipelineBuilderProps {
+  name: string;
+  onNameChange: (value: string) => void;
+  selectedSrc: string;
+  selectedDst: string;
+  onSelectSrc: (value: string) => void;
+  onSelectDst: (value: string) => void;
+  onCreate: () => void;
+  sourceOptions: Connector[];
+  destOptions: Connector[];
+  error: string | null;
+}
+
 function PipelineBuilder({
   name,
   onNameChange,
@@ -221,17 +290,17 @@ function PipelineBuilder({
   sourceOptions,
   destOptions,
   error,
-}) {
+}: PipelineBuilderProps) {
   return (
     <div className="form-panel">
       <h2>Compose pipeline</h2>
       <label className="label">Pipeline name</label>
-      <input value={name} onChange={(e) => onNameChange(e.target.value)} placeholder="nightly-sync" />
+      <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="nightly-sync" />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label className="label">Source</label>
-          <select value={selectedSrc} onChange={(e) => onSelectSrc(e.target.value)}>
+          <select value={selectedSrc} onChange={(event) => onSelectSrc(event.target.value)}>
             {sourceOptions.map((s) => (
               <option key={s.name} value={s.name}>
                 {s.name}
@@ -241,7 +310,7 @@ function PipelineBuilder({
         </div>
         <div>
           <label className="label">Destination</label>
-          <select value={selectedDst} onChange={(e) => onSelectDst(e.target.value)}>
+          <select value={selectedDst} onChange={(event) => onSelectDst(event.target.value)}>
             {destOptions.map((d) => (
               <option key={d.name} value={d.name}>
                 {d.name}
@@ -257,7 +326,14 @@ function PipelineBuilder({
   );
 }
 
-function PipelineRuns({ pipelines, onRun, running, lastRun }) {
+interface PipelineRunsProps {
+  pipelines: PipelineConfig[];
+  onRun: (name: string) => void;
+  running: boolean;
+  lastRun: RunResult | null;
+}
+
+function PipelineRuns({ pipelines, onRun, running, lastRun }: PipelineRunsProps) {
   return (
     <div className="card">
       <h3>Runs</h3>
@@ -308,7 +384,7 @@ function FooterNote() {
   );
 }
 
-function formatDuration(start, end) {
+function formatDuration(start: string, end: string) {
   const ms = new Date(end).getTime() - new Date(start).getTime();
   if (Number.isNaN(ms)) return 'a few moments';
   return `${ms} ms`;
